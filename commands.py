@@ -62,6 +62,7 @@ HELP_TEXT = """\
 
 
 **Claude Skills（直接转发给 Claude 执行）：**
+`/点评 <URL>` — 生成大众点评风格点评（dianping-review-maker）
 `/commit` — 提交代码
 其他 `/xxx` — 自动转发给 Claude 处理
 
@@ -90,6 +91,29 @@ BOT_COMMANDS = {
     "help", "h", "new", "clear", "resume", "model", "mode", "status", "cd", "ls",
     "workspace", "ws", "skills", "mcp", "usage", "stop", "error", "err",
 }
+
+# 中文/自定义别名 → 实际 Claude skill 命令。透传给 Claude 前改写，
+# 让飞书里能用好记的中文命令触发 skill。加新别名只需补一行。
+SKILL_ALIASES = {
+    "点评": "dianping-review-maker",
+}
+
+
+def rewrite_skill_alias(text: str) -> str:
+    """若消息是 SKILL_ALIASES 里的别名命令，改写为真实 skill 命令后返回；否则原样返回。"""
+    parsed = parse_command(text)
+    if not parsed:
+        return text
+    cmd, args = parsed
+    target = SKILL_ALIASES.get(cmd)
+    if target:
+        return f"/{target} {args}".strip()
+    # 中文命令常见漏空格（如 /点评https://xxx），按前缀兜底匹配
+    for alias, target in SKILL_ALIASES.items():
+        if cmd.startswith(alias) and len(cmd) > len(alias):
+            rest = cmd[len(alias):]
+            return f"/{target} {rest} {args}".strip()
+    return text
 
 
 async def _build_session_list(user_id: str, chat_id: str, store: SessionStore, cli_all: list[dict] | None = None) -> list[dict]:

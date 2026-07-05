@@ -27,7 +27,7 @@ from lark_oapi.event.callback.model.p2_card_action_trigger import (
 import bot_config as config
 from feishu_client import FeishuClient
 from session_store import SessionStore, generate_summary, _write_custom_title
-from commands import parse_command, handle_command
+from commands import parse_command, handle_command, rewrite_skill_alias
 from claude_runner import run_claude
 from run_control import ActiveRun, ActiveRunRegistry, stop_run
 from error_tracker import log_error, format_error
@@ -530,6 +530,10 @@ async def _process_message(user_id: str, chat_id: str, is_group: bool, msg):
                     await feishu.send_card_to_user(user_id, content=reply_text, loading=False)
             return
         # reply is None → 不是 bot 命令，当作普通消息（含 /xxx）转发给 Claude
+        rewritten = rewrite_skill_alias(text)
+        if rewritten != text:
+            print(f"[alias] {text.split()[0]} → {rewritten.split()[0]}", flush=True)
+            text = rewritten
 
     # ── 普通消息 → 调用 Claude ──────────────────────────────
     session = await store.get_current(user_id, chat_id)
