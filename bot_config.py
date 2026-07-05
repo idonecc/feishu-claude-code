@@ -15,6 +15,11 @@ PERMISSION_MODE = os.getenv("PERMISSION_MODE", "bypassPermissions")
 
 SESSIONS_DIR = os.path.expanduser("~/.feishu-claude")
 
+# Claude 子进程出境代理。Anthropic API 对大陆 IP 直连返回 403 Request not allowed，
+# launchd/systemd 环境没有 shell 的代理变量，需在 .env 显式指定（只注入 claude 子进程，
+# 飞书 API 仍走直连）。留空则不注入，海外环境无需配置。
+CLAUDE_PROXY = os.getenv("CLAUDE_PROXY", "")
+
 # 卡片按钮回调 HTTP 端口（需 ngrok 暴露）
 CALLBACK_PORT = int(os.getenv("CALLBACK_PORT", "9981"))
 

@@ -9,7 +9,7 @@ import os
 import subprocess as sp
 from typing import Callable, Optional
 
-from bot_config import PERMISSION_MODE, CLAUDE_CLI
+from bot_config import PERMISSION_MODE, CLAUDE_CLI, CLAUDE_PROXY
 
 IDLE_TIMEOUT = 300  # 5 分钟无输出且无子进程，视为挂死
 _CHECK_INTERVAL = 30  # 静默时每 30 秒检查一次子进程
@@ -78,7 +78,20 @@ async def run_claude(
             cmd += ["--model", model]
 
         env = os.environ.copy()
-        env.pop("CLAUDECODE", None)
+        # 剥掉继承的 Claude Code / Anthropic 网关变量，强制 CLI 走本机 Max 订阅登录态。
+        # 否则 CLI 会用 ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL 打网关 → 403 Request not allowed
+        stripped = [k for k in env if k.startswith("ANTHROPIC_") or k.startswith("CLAUDE_CODE") or k == "CLAUDECODE"]
+        for k in stripped:
+            env.pop(k, None)
+        if stripped:
+            print(f"[run_claude] 已剥离环境变量: {', '.join(sorted(stripped))}", flush=True)
+        # 注入出境代理：Anthropic API 大陆直连被拒 403，launchd 环境无 shell 代理变量
+        if CLAUDE_PROXY:
+            env.setdefault("HTTPS_PROXY", CLAUDE_PROXY)
+            env.setdefault("HTTP_PROXY", CLAUDE_PROXY)
+            env.setdefault("NO_PROXY", "localhost,127.0.0.1")
+            print(f"[run_claude] 代理: {env['HTTPS_PROXY']}", flush=True)
+        print(f"[run_claude] cmd: {' '.join(cmd)}", flush=True)
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -184,6 +197,16 @@ async def run_claude(
                     final_text = _extract_text_content(data.get("result", ""))
                     if final_text:
                         full_text = final_text
+                    # 详细记录 result 事件，is_error=True 时 CLI 把错误当正文返回
+                    is_err = data.get("is_error", False)
+                    subtype = data.get("subtype", "")
+                    preview = (final_text or "")[:200].replace("\n", " ")
+                    print(
+                        f"[run_claude] result: is_error={is_err} subtype={subtype} "
+                        f"duration_ms={data.get('duration_ms')} cost=${data.get('total_cost_usd', 0):.4f} "
+                        f"text[:200]={preview!r}",
+                        flush=True,
+                    )
 
         except RuntimeError:
             raise
@@ -191,6 +214,11 @@ async def run_claude(
         stderr_output = await proc.stderr.read()
         await proc.wait()
         stderr_text = stderr_output.decode("utf-8", errors="replace").strip()
+        print(
+            f"[run_claude] 进程退出 code={proc.returncode}"
+            + (f" stderr[:300]={stderr_text[:300]!r}" if stderr_text else " (无stderr)"),
+            flush=True,
+        )
         return full_text.strip(), new_session_id, proc.returncode, stderr_text
 
     final_text, new_session_id, returncode, stderr_text = await _run_once(session_id)

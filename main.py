@@ -30,6 +30,7 @@ from session_store import SessionStore, generate_summary, _write_custom_title
 from commands import parse_command, handle_command
 from claude_runner import run_claude
 from run_control import ActiveRun, ActiveRunRegistry, stop_run
+from error_tracker import log_error, format_error
 
 # ── 看门狗：定时重启防止 WebSocket 假死 ──────────────────────
 
@@ -259,9 +260,26 @@ async def handle_message_async(event: P2ImMessageReceiveV1):
         try:
             await _process_message(user_id, chat_id, is_group, msg)
         except Exception as e:
-            print(f"[error] 消息处理异常: {type(e).__name__}: {e}", flush=True)
+            # 记录错误并生成ID
+            error_id = log_error(
+                e,
+                context={"message_type": msg.message_type, "chat_type": msg.chat_type},
+                user_id=user_id,
+                chat_id=chat_id,
+            )
+            print(f"[error] 消息处理异常 {error_id}: {type(e).__name__}: {e}", flush=True)
             traceback.print_exc(file=sys.stdout)
             sys.stdout.flush()
+
+            # 发送友好的错误提示给用户
+            error_msg = f"❌ 处理消息时出错\n\n错误ID: `{error_id}`\n\n请将此ID发给开发者以快速定位问题。"
+            try:
+                if is_group:
+                    await feishu.reply_card(msg.message_id, content=error_msg, loading=False)
+                else:
+                    await feishu.send_card_to_user(user_id, content=error_msg, loading=False)
+            except Exception:
+                pass  # 发送错误提示失败也不影响主流程
 
 
 async def _run_and_display(
@@ -967,9 +985,12 @@ def _start_ngrok(port):
     import subprocess
     import urllib.request
 
+    # 本机 4040 API 必须绕过系统代理，否则代理会替 127.0.0.1 回 503
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
     # 先检查已有的 ngrok 隧道
     try:
-        with urllib.request.urlopen("http://127.0.0.1:4040/api/tunnels", timeout=2) as r:
+        with opener.open("http://127.0.0.1:4040/api/tunnels", timeout=2) as r:
             tunnels = json.loads(r.read())
             for t in tunnels.get("tunnels", []):
                 if t.get("proto") == "https":
@@ -978,16 +999,22 @@ def _start_ngrok(port):
         pass
 
     # 启动新 ngrok（有固定域名就用，保证重启后 URL 不变）
+    # ngrok 认证会被 http_proxy 环境变量搞挂（ERR_NGROK_9009），剥掉再启
     try:
+        env = {
+            k: v for k, v in os.environ.items()
+            if k.lower() not in ("http_proxy", "https_proxy", "all_proxy", "no_proxy")
+        }
         ngrok_domain = os.environ.get("NGROK_DOMAIN", "")
         ngrok_cmd = ["ngrok", "http", "--url", ngrok_domain, str(port)] if ngrok_domain else ["ngrok", "http", str(port)]
         subprocess.Popen(
             ngrok_cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env=env,
         )
         time.sleep(3)
-        with urllib.request.urlopen("http://127.0.0.1:4040/api/tunnels", timeout=5) as r:
+        with opener.open("http://127.0.0.1:4040/api/tunnels", timeout=5) as r:
             tunnels = json.loads(r.read())
             for t in tunnels.get("tunnels", []):
                 if t.get("proto") == "https":
@@ -1029,7 +1056,8 @@ def main():
 
     # 启动后台线程
     threading.Thread(target=_watchdog, daemon=True).start()
-    threading.Thread(target=_bg_summary_thread, daemon=True).start()
+    # 暂时关闭摘要功能（403错误）
+    # threading.Thread(target=_bg_summary_thread, daemon=True).start()
 
     print("✅ 连接飞书 WebSocket 长连接（自动重连）...")
     ws_client.start()  # 阻塞，内部运行 asyncio loop

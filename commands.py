@@ -58,6 +58,7 @@ HELP_TEXT = """\
 `/skills` — 列出已安装的 Claude Skills
 `/mcp` — 列出已配置的 MCP Servers
 `/usage` — 查看 Claude Max 订阅用量百分比和重置时间
+`/error <ID>` — 查询错误详情（如 `/error ERR-20260705-a3b4c5`）
 
 
 **Claude Skills（直接转发给 Claude 执行）：**
@@ -87,7 +88,7 @@ def parse_command(text: str) -> Optional[Tuple[str, str]]:
 # Bot 自身处理的命令，其余 /xxx 转发给 Claude
 BOT_COMMANDS = {
     "help", "h", "new", "clear", "resume", "model", "mode", "status", "cd", "ls",
-    "workspace", "ws", "skills", "mcp", "usage", "stop",
+    "workspace", "ws", "skills", "mcp", "usage", "stop", "error", "err",
 }
 
 
@@ -689,6 +690,14 @@ async def handle_command(
 
     elif cmd == "stop":
         return "⏹ /stop 命令在消息队列外处理，如果看到这条说明当前没有运行中的任务。"
+
+    elif cmd in ("error", "err"):
+        # /error <ERROR_ID> - 查询错误详情
+        if not args:
+            return "用法: `/error ERR-20260705-a3b4c5`\n\n查询错误详情，请提供完整的错误ID。"
+
+        from error_tracker import format_error
+        return format_error(args.strip())
 
     else:
         return None  # fallback: 转发给 Claude
